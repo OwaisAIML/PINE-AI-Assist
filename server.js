@@ -35,10 +35,16 @@ console.log('SMTP_USER set:', !!process.env.SMTP_USER);
 console.log('=============================');
 
 // ----- GOOGLE SHEETS SETUP -----
+// ----- GOOGLE SHEETS SETUP -----
+const googleClientEmail = process.env.GOOGLE_CLIENT_EMAIL || null;
+
+// Read the key and convert literal '\n' sequences to real newlines
+const googlePrivateKey = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+
 let sheets = null;
-if (process.env.GOOGLE_CLIENT_EMAIL && googlePrivateKey) {
+if (googleClientEmail && googlePrivateKey) {
   const auth = new google.auth.JWT(
-    process.env.GOOGLE_CLIENT_EMAIL,
+    googleClientEmail,
     null,
     googlePrivateKey,
     ['https://www.googleapis.com/auth/spreadsheets']
@@ -49,20 +55,19 @@ if (process.env.GOOGLE_CLIENT_EMAIL && googlePrivateKey) {
 }
 
 async function appendSheetRow(row) {
-  if (!SHEET_ID || !sheets) {
+  if (!process.env.GOOGLE_SHEET_ID || !sheets) {
     console.warn('appendSheetRow: SHEET_ID or sheets client missing; not calling Sheets API.');
     return;
   }
 
   await sheets.spreadsheets.values.append({
-    spreadsheetId: SHEET_ID,
+    spreadsheetId: process.env.GOOGLE_SHEET_ID,
     range: 'Sheet1!A:Z',
     valueInputOption: 'RAW',
-    requestBody: {
-      values: [row],
-    },
+    requestBody: { values: [row] },
   });
 }
+
 
 // ----- GROQ CALLER -----
 async function callGroq(messages) {
