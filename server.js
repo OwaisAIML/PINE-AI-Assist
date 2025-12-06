@@ -16,11 +16,20 @@ const OWNER_EMAIL = process.env.OWNER_EMAIL;
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const GROK_API_KEY = process.env.GROK_API_KEY;
 
+// Log env presence (no secrets)
+console.log('=== ENV CHECK AT STARTUP ===');
+console.log('GROK_API_KEY set:', !!GROK_API_KEY);
+console.log('GOOGLE_SHEET_ID:', SHEET_ID ? 'present' : 'MISSING');
+console.log('OWNER_EMAIL:', OWNER_EMAIL || 'MISSING');
+console.log('SMTP_HOST:', process.env.SMTP_HOST || 'MISSING');
+console.log('SMTP_PORT:', process.env.SMTP_PORT || 'MISSING');
+console.log('SMTP_USER set:', !!process.env.SMTP_USER);
+console.log('=============================');
+
 // ----- GOOGLE SHEETS SETUP -----
 const auth = new google.auth.JWT(
   process.env.GOOGLE_CLIENT_EMAIL,
   null,
-  // important: convert \n in env to real newlines
   process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
   ['https://www.googleapis.com/auth/spreadsheets']
 );
@@ -28,9 +37,14 @@ const auth = new google.auth.JWT(
 const sheets = google.sheets({ version: 'v4', auth });
 
 async function appendSheetRow(row) {
+  if (!SHEET_ID) {
+    console.error('appendSheetRow: SHEET_ID is missing, not calling Sheets API.');
+    return;
+  }
+
   await sheets.spreadsheets.values.append({
     spreadsheetId: SHEET_ID,
-    range: 'Sheet1!A:Z', // adjust if needed
+    range: 'Sheet1!A:Z',
     valueInputOption: 'RAW',
     requestBody: {
       values: [row],
@@ -52,7 +66,7 @@ async function callGrok(messages) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'grok-2-latest', // adjust if your model name is different
+      model: 'grok-2-latest',
       messages,
       temperature: 0.7,
     }),
@@ -78,25 +92,53 @@ function createTransporter() {
     return null;
   }
 
-  return nodemailer.createTransport({
+  const transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT) || 587,
-    secure: false, // true for 465, false for 587
+    secure: Number(process.env.SMTP_PORT) === 465, // true if 465, else false
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
   });
+
+  // Optional: verify connection at startup
+  transporter.verify((err, success) => {
+    if (err) {
+      console.warn('SMTP verify failed:', err.message);
+    } else {
+      console.log('SMTP server is ready to take messages.');
+    }
+  });
+
+  return transporter;
 }
+
+// Create one transporter instance (or null if misconfigured)
+const emailTransporter = createTransporter();
 
 // ----- ROUTES -----
 
-// Simple health check for Render
+// Health check
 app.get('/', (req, res) => {
   res.send('PINE AI Assist backend is running ✅');
 });
 
-// Optional: avoid "Cannot GET /api/contact" in browser
+// Debug route to see env status (no secrets)
+app.get('/debug', (req, res) => {
+  res.json({
+    env: {
+      GROK_API_KEY: !!process.env.GROK_API_KEY,
+      GOOGLE_SHEET_ID: process.env.GOOGLE_SHEET_ID ? 'present' : 'missing',
+      OWNER_EMAIL: !!process.env.OWNER_EMAIL,
+      SMTP_HOST: process.env.SMTP_HOST || 'MISSING',
+      SMTP_PORT: process.env.SMTP_PORT || 'MISSING',
+      SMTP_USER: !!process.env.SMTP_USER,
+    },
+  });
+});
+
+// Avoid "Cannot GET /api/contact" confusion
 app.get('/api/contact', (req, res) => {
   res.send('Use POST with JSON body to /api/contact for AI replies.');
 });
@@ -107,7 +149,8 @@ app.post('/api/contact', async (req, res) => {
     const id = uuidv4();
     const timestamp = new Date().toISOString();
 
-    // Basic system prompt — you can customize this later
+    console.log('Incoming lead:', { name, contact, source });
+
     const systemMessage =
       'You are PINE AI Assist, a professional assistant for a small business. Tone: helpful, concise, polite. Answer the customer and include a short CTA.';
 
@@ -118,16 +161,14 @@ app.post('/api/contact', async (req, res) => {
       { role: 'user', content: userMessage },
     ]);
 
-    // Attempt to parse JSON. If Grok returned raw text, fallback.
     let replyText = aiResp;
     try {
       const parsed = JSON.parse(aiResp);
       if (parsed.reply_text) replyText = parsed.reply_text;
     } catch (e) {
-      // not JSON — use raw
+      // ignore, plain text
     }
 
-    // Save to Google Sheet (id, timestamp, name, contact, message, reply, source)
     const row = [
       id,
       timestamp,
@@ -140,33 +181,30 @@ app.post('/api/contact', async (req, res) => {
 
     try {
       await appendSheetRow(row);
+      console.log('Sheet append OK for lead', id);
     } catch (err) {
       console.warn('Sheet append failed:', err.message);
     }
 
-    // Send simple email notification (optional if OWNER_EMAIL is set)
-    if (OWNER_EMAIL) {
-      const transporter = createTransporter();
-      if (transporter) {
-        try {
-          const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER;
-          await transporter.sendMail({
-            from: fromEmail,
-            to: OWNER_EMAIL,
-            subject: `New lead: ${name || 'Website visitor'}`,
-            text: `New lead at ${timestamp}
+    if (OWNER_EMAIL && emailTransporter) {
+      try {
+        const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER;
+        await emailTransporter.sendMail({
+          from: fromEmail,
+          to: OWNER_EMAIL,
+          subject: `New lead: ${name || 'Website visitor'}`,
+          text: `New lead at ${timestamp}
 Name: ${name || ''}
 Contact: ${contact || ''}
 Message: ${message || ''}
 AI Reply: ${replyText}`,
-          });
-          console.log('Lead email sent to', OWNER_EMAIL);
-        } catch (err) {
-          console.warn('Email failed:', err.message);
-        }
+        });
+        console.log('Lead email sent to', OWNER_EMAIL);
+      } catch (err) {
+        console.warn('Email failed:', err.message);
       }
     } else {
-      console.warn('OWNER_EMAIL is not set; skipping notification email.');
+      console.warn('Skipping email: OWNER_EMAIL or SMTP config missing.');
     }
 
     return res.json({ id, reply: replyText });
