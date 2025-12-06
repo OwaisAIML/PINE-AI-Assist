@@ -14,12 +14,23 @@ app.use(express.json());
 // ----- ENV -----
 const OWNER_EMAIL = process.env.OWNER_EMAIL;
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
-const GROK_API_KEY = process.env.GROK_API_KEY;
 
-// Log env presence (no secrets)
+// 👉 now using GROQ, not GROK
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+
+// ----- GOOGLE PRIVATE KEY HANDLING -----
+let googlePrivateKey = process.env.GOOGLE_PRIVATE_KEY || null;
+// If stored with \n in env, convert to real newlines
+if (googlePrivateKey && googlePrivateKey.includes('\\n')) {
+  googlePrivateKey = googlePrivateKey.replace(/\\n/g, '\n');
+}
+
+// ----- ENV CHECK -----
 console.log('=== ENV CHECK AT STARTUP ===');
-console.log('GROK_API_KEY set:', !!GROK_API_KEY);
+console.log('GROQ_API_KEY set:', !!GROQ_API_KEY);
 console.log('GOOGLE_SHEET_ID:', SHEET_ID ? 'present' : 'MISSING');
+console.log('GOOGLE_CLIENT_EMAIL:', process.env.GOOGLE_CLIENT_EMAIL ? 'present' : 'MISSING');
+console.log('GOOGLE_PRIVATE_KEY looks like PEM:', googlePrivateKey && googlePrivateKey.includes('BEGIN PRIVATE KEY') ? 'yes' : 'no');
 console.log('OWNER_EMAIL:', OWNER_EMAIL || 'MISSING');
 console.log('SMTP_HOST:', process.env.SMTP_HOST || 'MISSING');
 console.log('SMTP_PORT:', process.env.SMTP_PORT || 'MISSING');
@@ -27,18 +38,22 @@ console.log('SMTP_USER set:', !!process.env.SMTP_USER);
 console.log('=============================');
 
 // ----- GOOGLE SHEETS SETUP -----
-const auth = new google.auth.JWT(
-  process.env.GOOGLE_CLIENT_EMAIL,
-  null,
-  process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-  ['https://www.googleapis.com/auth/spreadsheets']
-);
-
-const sheets = google.sheets({ version: 'v4', auth });
+let sheets = null;
+if (process.env.GOOGLE_CLIENT_EMAIL && googlePrivateKey) {
+  const auth = new google.auth.JWT(
+    process.env.GOOGLE_CLIENT_EMAIL,
+    null,
+    googlePrivateKey,
+    ['https://www.googleapis.com/auth/spreadsheets']
+  );
+  sheets = google.sheets({ version: 'v4', auth });
+} else {
+  console.warn('Google Sheets auth not fully configured; skipping Sheets client init.');
+}
 
 async function appendSheetRow(row) {
-  if (!SHEET_ID) {
-    console.error('appendSheetRow: SHEET_ID is missing, not calling Sheets API.');
+  if (!SHEET_ID || !sheets) {
+    console.warn('appendSheetRow: SHEET_ID or sheets client missing; not calling Sheets API.');
     return;
   }
 
@@ -52,21 +67,21 @@ async function appendSheetRow(row) {
   });
 }
 
-// ----- GROK (xAI) CALLER -----
-async function callGrok(messages) {
-  if (!GROK_API_KEY) {
-    console.error('Missing GROK_API_KEY in environment');
+// ----- GROQ CALLER -----
+async function callGroq(messages) {
+  if (!GROQ_API_KEY) {
+    console.error('Missing GROQ_API_KEY in environment');
     return 'Sorry, my AI configuration is incomplete.';
   }
 
-  const resp = await fetch('https://api.x.ai/v1/chat/completions', {
+  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${GROK_API_KEY}`,
+      Authorization: `Bearer ${GROQ_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'grok-2-latest',
+      model: 'llama-3.1-70b-versatile', // common Groq model; adjust if needed
       messages,
       temperature: 0.7,
     }),
@@ -74,7 +89,7 @@ async function callGrok(messages) {
 
   if (!resp.ok) {
     const text = await resp.text();
-    console.error('Grok API error:', resp.status, text);
+    console.error('Groq API error:', resp.status, text);
     return 'Sorry, I could not generate a reply right now.';
   }
 
@@ -114,7 +129,6 @@ function createTransporter() {
   return transporter;
 }
 
-// Create one transporter instance (or null if misconfigured)
 const emailTransporter = createTransporter();
 
 // ----- ROUTES -----
@@ -124,12 +138,14 @@ app.get('/', (req, res) => {
   res.send('PINE AI Assist backend is running ✅');
 });
 
-// Debug route to see env status (no secrets)
+// Debug route to inspect env status (no secrets)
 app.get('/debug', (req, res) => {
   res.json({
     env: {
-      GROK_API_KEY: !!process.env.GROK_API_KEY,
+      GROQ_API_KEY: !!process.env.GROQ_API_KEY,
       GOOGLE_SHEET_ID: process.env.GOOGLE_SHEET_ID ? 'present' : 'missing',
+      GOOGLE_CLIENT_EMAIL: !!process.env.GOOGLE_CLIENT_EMAIL,
+      GOOGLE_PRIVATE_KEY: googlePrivateKey && googlePrivateKey.includes('BEGIN PRIVATE KEY') ? 'looks_ok' : 'invalid_or_missing',
       OWNER_EMAIL: !!process.env.OWNER_EMAIL,
       SMTP_HOST: process.env.SMTP_HOST || 'MISSING',
       SMTP_PORT: process.env.SMTP_PORT || 'MISSING',
@@ -156,7 +172,7 @@ app.post('/api/contact', async (req, res) => {
 
     const userMessage = `Customer message: "${message}"`;
 
-    const aiResp = await callGrok([
+    const aiResp = await callGroq([
       { role: 'system', content: systemMessage },
       { role: 'user', content: userMessage },
     ]);
