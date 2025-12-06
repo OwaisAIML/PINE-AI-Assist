@@ -30,7 +30,7 @@ const sheets = google.sheets({ version: 'v4', auth });
 async function appendSheetRow(row) {
   await sheets.spreadsheets.values.append({
     spreadsheetId: SHEET_ID,
-    range: 'Sheet1!A:Z',          // change if your sheet name/range is different
+    range: 'Sheet1!A:Z', // adjust if needed
     valueInputOption: 'RAW',
     requestBody: {
       values: [row],
@@ -45,15 +45,14 @@ async function callGrok(messages) {
     return 'Sorry, my AI configuration is incomplete.';
   }
 
-  // ✅ Call Grok API, NOT your own /api/contact
   const resp = await fetch('https://api.x.ai/v1/chat/completions', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${GROK_API_KEY}`,
+      Authorization: `Bearer ${GROK_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'grok-2-latest',   // adjust if your model name is different
+      model: 'grok-2-latest', // adjust if your model name is different
       messages,
       temperature: 0.7,
     }),
@@ -72,11 +71,34 @@ async function callGrok(messages) {
   );
 }
 
+// ----- EMAIL (SMTP) SETUP -----
+function createTransporter() {
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    console.warn('SMTP not fully configured, emails will not be sent.');
+    return null;
+  }
+
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT) || 587,
+    secure: false, // true for 465, false for 587
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+}
+
 // ----- ROUTES -----
 
 // Simple health check for Render
 app.get('/', (req, res) => {
   res.send('PINE AI Assist backend is running ✅');
+});
+
+// Optional: avoid "Cannot GET /api/contact" in browser
+app.get('/api/contact', (req, res) => {
+  res.send('Use POST with JSON body to /api/contact for AI replies.');
 });
 
 app.post('/api/contact', async (req, res) => {
@@ -119,26 +141,32 @@ app.post('/api/contact', async (req, res) => {
     try {
       await appendSheetRow(row);
     } catch (err) {
-      console.warn('Sheet append failed', err.message);
+      console.warn('Sheet append failed:', err.message);
     }
 
     // Send simple email notification (optional if OWNER_EMAIL is set)
     if (OWNER_EMAIL) {
-      try {
-        const transporter = nodemailer.createTransport({ sendmail: true });
-        await transporter.sendMail({
-          from: 'no-reply@pine.ai',
-          to: OWNER_EMAIL,
-          subject: `New lead: ${name || 'Website visitor'}`,
-          text: `New lead at ${timestamp}
+      const transporter = createTransporter();
+      if (transporter) {
+        try {
+          const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER;
+          await transporter.sendMail({
+            from: fromEmail,
+            to: OWNER_EMAIL,
+            subject: `New lead: ${name || 'Website visitor'}`,
+            text: `New lead at ${timestamp}
 Name: ${name || ''}
 Contact: ${contact || ''}
 Message: ${message || ''}
 AI Reply: ${replyText}`,
-        });
-      } catch (err) {
-        console.warn('Email failed', err.message);
+          });
+          console.log('Lead email sent to', OWNER_EMAIL);
+        } catch (err) {
+          console.warn('Email failed:', err.message);
+        }
       }
+    } else {
+      console.warn('OWNER_EMAIL is not set; skipping notification email.');
     }
 
     return res.json({ id, reply: replyText });
