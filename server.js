@@ -19,11 +19,8 @@ const SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 // ----- GOOGLE PRIVATE KEY HANDLING -----
-let googlePrivateKey = process.env.GOOGLE_PRIVATE_KEY || null;
-// If stored with \n in env, convert to real newlines
-if (googlePrivateKey && googlePrivateKey.includes('\\n')) {
-  googlePrivateKey = googlePrivateKey.replace(/\\n/g, '\n');
-}
+const googlePrivateKey = process.env.GOOGLE_PRIVATE_KEY || null;
+
 
 // ----- ENV CHECK -----
 console.log('=== ENV CHECK AT STARTUP ===');
@@ -81,7 +78,7 @@ async function callGroq(messages) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'llama-3.1-70b-versatile', // common Groq model; adjust if needed
+      model: 'llama-3.3-70b-versatile',
       messages,
       temperature: 0.7,
     }),
@@ -99,6 +96,7 @@ async function callGroq(messages) {
     'Sorry, I could not generate a reply.'
   );
 }
+
 
 // ----- EMAIL (SMTP) SETUP -----
 function createTransporter() {
