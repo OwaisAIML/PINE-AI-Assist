@@ -1,0 +1,75 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PINE AI Assist — Demo</title>
+<style>
+body { font-family: Arial, sans-serif; padding: 24px; max-width: 720px; margin: auto }
+.chat { border: 1px solid #ddd; padding: 12px; border-radius: 8px; min-height: 150px }
+.message { margin: 8px 0 }
+.me { text-align: right }
+.bot { text-align: left }
+.lead-form { margin-top: 16px }
+input, textarea { width: 100%; padding: 8px; margin: 6px 0; box-sizing: border-box }
+button { padding: 10px 14px; border-radius: 6px }
+</style>
+</head>
+<body>
+<h1>PINE AI Assist — Demo</h1>
+<div class="chat" id="chat"></div>
+
+
+<form id="contactForm" class="lead-form">
+<input id="name" placeholder="Your name (optional)" />
+<input id="contact" placeholder="Email or phone" />
+<textarea id="message" placeholder="Type your message..." rows="4"></textarea>
+<button type="submit">Send</button>
+</form>
+
+
+<script>
+const chat = document.getElementById('chat');
+const form = document.getElementById('contactForm');
+
+
+function appendMessage(text, cls) {
+const div = document.createElement('div');
+div.className = 'message ' + cls;
+div.textContent = text;
+chat.appendChild(div);
+chat.scrollTop = chat.scrollHeight;
+}
+
+
+form.addEventListener('submit', async (e) => {
+e.preventDefault();
+const name = document.getElementById('name').value;
+const contact = document.getElementById('contact').value;
+const message = document.getElementById('message').value;
+if (!message) return;
+appendMessage('You: ' + message, 'me');
+
+
+appendMessage('PINE AI Assist is typing...', 'bot');
+
+
+const res = await fetch('/api/contact', {
+method: 'POST',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ name, contact, message, source: 'web' })
+});
+
+
+const json = await res.json();
+// remove typing line
+const last = chat.querySelector('.bot:last-child');
+if (last && last.textContent === 'PINE AI Assist is typing...') last.remove();
+
+
+if (json && json.reply) appendMessage('PINE AI Assist: ' + json.reply, 'bot');
+else appendMessage('PINE AI Assist: Sorry, something went wrong.', 'bot');
+
+
+document.getElementById('message').value = '';
+});
+</script>
+</body>
+</html>
