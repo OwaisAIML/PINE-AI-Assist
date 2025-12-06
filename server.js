@@ -45,6 +45,7 @@ async function callGrok(messages) {
     return 'Sorry, my AI configuration is incomplete.';
   }
 
+  // ✅ Call Grok API, NOT your own /api/contact
   const resp = await fetch('https://api.x.ai/v1/chat/completions', {
     method: 'POST',
     headers: {
