@@ -6,7 +6,6 @@ const cors = require('cors');
 const { google } = require('googleapis');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
-const OpenAI = require('openai');
 
 const app = express();
 app.use(cors());
@@ -15,6 +14,7 @@ app.use(express.json());
 // ----- ENV -----
 const OWNER_EMAIL = process.env.OWNER_EMAIL;
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const GROK_API_KEY = process.env.GROK_API_KEY;
 
 // ----- GOOGLE SHEETS SETUP -----
 const auth = new google.auth.JWT(
@@ -38,19 +38,37 @@ async function appendSheetRow(row) {
   });
 }
 
-// ----- OPENAI SETUP -----
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// ----- GROK (xAI) CALLER -----
+async function callGrok(messages) {
+  if (!GROK_API_KEY) {
+    console.error('Missing GROK_API_KEY in environment');
+    return 'Sorry, my AI configuration is incomplete.';
+  }
 
-async function callOpenAI(messages) {
-  const resp = await openai.chat.completions.create({
-    model: 'gpt-4.1-mini',        // or any other model you use
-    messages,
-    temperature: 0.7,
+  const resp = await fetch('https://api.x.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${GROK_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'grok-2-latest',   // adjust if your model name is different
+      messages,
+      temperature: 0.7,
+    }),
   });
 
-  return resp.choices[0].message.content;
+  if (!resp.ok) {
+    const text = await resp.text();
+    console.error('Grok API error:', resp.status, text);
+    return 'Sorry, I could not generate a reply right now.';
+  }
+
+  const data = await resp.json();
+  return (
+    data.choices?.[0]?.message?.content ||
+    'Sorry, I could not generate a reply.'
+  );
 }
 
 // ----- ROUTES -----
@@ -72,12 +90,12 @@ app.post('/api/contact', async (req, res) => {
 
     const userMessage = `Customer message: "${message}"`;
 
-    const aiResp = await callOpenAI([
+    const aiResp = await callGrok([
       { role: 'system', content: systemMessage },
       { role: 'user', content: userMessage },
     ]);
 
-    // Attempt to parse JSON. If AI returned raw text, fallback.
+    // Attempt to parse JSON. If Grok returned raw text, fallback.
     let replyText = aiResp;
     try {
       const parsed = JSON.parse(aiResp);
