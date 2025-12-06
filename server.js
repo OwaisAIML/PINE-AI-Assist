@@ -11,65 +11,69 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ----- ENV -----
-const OWNER_EMAIL = process.env.OWNER_EMAIL;
-const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+// ---------- ENV ----------
+const OWNER_EMAIL = process.env.OWNER_EMAIL || null;
+const SHEET_ID = process.env.GOOGLE_SHEET_ID || null;
 
-// 👉 now using GROQ, not GROK
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
+// we are using GROQ (free), not Grok
+const GROQ_API_KEY = process.env.GROQ_API_KEY || null;
 
-// ----- GOOGLE PRIVATE KEY HANDLING -----
-const googlePrivateKey = process.env.GOOGLE_PRIVATE_KEY || null;
+// Google service account
+const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL || null;
+// stored as one line with \n in env, convert to real newlines here
+const GOOGLE_PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
-
-// ----- ENV CHECK -----
+// ---------- ENV DEBUG ----------
 console.log('=== ENV CHECK AT STARTUP ===');
 console.log('GROQ_API_KEY set:', !!GROQ_API_KEY);
 console.log('GOOGLE_SHEET_ID:', SHEET_ID ? 'present' : 'MISSING');
-console.log('GOOGLE_CLIENT_EMAIL:', process.env.GOOGLE_CLIENT_EMAIL ? 'present' : 'MISSING');
-console.log('GOOGLE_PRIVATE_KEY looks like PEM:', googlePrivateKey && googlePrivateKey.includes('BEGIN PRIVATE KEY') ? 'yes' : 'no');
+console.log('GOOGLE_CLIENT_EMAIL:', GOOGLE_CLIENT_EMAIL ? 'present' : 'MISSING');
+console.log(
+  'GOOGLE_PRIVATE_KEY looks like PEM:',
+  GOOGLE_PRIVATE_KEY.includes('BEGIN PRIVATE KEY') ? 'yes' : 'no'
+);
 console.log('OWNER_EMAIL:', OWNER_EMAIL || 'MISSING');
 console.log('SMTP_HOST:', process.env.SMTP_HOST || 'MISSING');
 console.log('SMTP_PORT:', process.env.SMTP_PORT || 'MISSING');
 console.log('SMTP_USER set:', !!process.env.SMTP_USER);
 console.log('=============================');
 
-// ----- GOOGLE SHEETS SETUP -----
-// ----- GOOGLE SHEETS SETUP -----
-const googleClientEmail = process.env.GOOGLE_CLIENT_EMAIL || null;
-
-// Read the key and convert literal '\n' sequences to real newlines
-const googlePrivateKey = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
-
+// ---------- GOOGLE SHEETS SETUP ----------
 let sheets = null;
-if (googleClientEmail && googlePrivateKey) {
-  const auth = new google.auth.JWT(
-    googleClientEmail,
-    null,
-    googlePrivateKey,
-    ['https://www.googleapis.com/auth/spreadsheets']
-  );
-  sheets = google.sheets({ version: 'v4', auth });
+
+if (GOOGLE_CLIENT_EMAIL && GOOGLE_PRIVATE_KEY) {
+  try {
+    const auth = new google.auth.JWT(
+      GOOGLE_CLIENT_EMAIL,
+      null,
+      GOOGLE_PRIVATE_KEY,
+      ['https://www.googleapis.com/auth/spreadsheets']
+    );
+
+    sheets = google.sheets({ version: 'v4', auth });
+    console.log('Google Sheets client initialised.');
+  } catch (err) {
+    console.error('Failed to init Google Sheets auth:', err.message);
+  }
 } else {
   console.warn('Google Sheets auth not fully configured; skipping Sheets client init.');
 }
 
 async function appendSheetRow(row) {
-  if (!process.env.GOOGLE_SHEET_ID || !sheets) {
+  if (!SHEET_ID || !sheets) {
     console.warn('appendSheetRow: SHEET_ID or sheets client missing; not calling Sheets API.');
     return;
   }
 
   await sheets.spreadsheets.values.append({
-    spreadsheetId: process.env.GOOGLE_SHEET_ID,
+    spreadsheetId: SHEET_ID,
     range: 'Sheet1!A:Z',
     valueInputOption: 'RAW',
     requestBody: { values: [row] },
   });
 }
 
-
-// ----- GROQ CALLER -----
+// ---------- GROQ CALLER ----------
 async function callGroq(messages) {
   if (!GROQ_API_KEY) {
     console.error('Missing GROQ_API_KEY in environment');
@@ -83,7 +87,7 @@ async function callGroq(messages) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      model: 'llama-3.3-70b-versatile', // current Groq chat model
       messages,
       temperature: 0.7,
     }),
@@ -102,8 +106,7 @@ async function callGroq(messages) {
   );
 }
 
-
-// ----- EMAIL (SMTP) SETUP -----
+// ---------- EMAIL (SMTP) ----------
 function createTransporter() {
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
     console.warn('SMTP not fully configured, emails will not be sent.');
@@ -120,7 +123,6 @@ function createTransporter() {
     },
   });
 
-  // Optional: verify connection at startup
   transporter.verify((err, success) => {
     if (err) {
       console.warn('SMTP verify failed:', err.message);
@@ -134,22 +136,24 @@ function createTransporter() {
 
 const emailTransporter = createTransporter();
 
-// ----- ROUTES -----
+// ---------- ROUTES ----------
 
-// Health check
+// health check
 app.get('/', (req, res) => {
   res.send('PINE AI Assist backend is running ✅');
 });
 
-// Debug route to inspect env status (no secrets)
+// debug route to inspect env / config (no secrets)
 app.get('/debug', (req, res) => {
   res.json({
     env: {
-      GROQ_API_KEY: !!process.env.GROQ_API_KEY,
-      GOOGLE_SHEET_ID: process.env.GOOGLE_SHEET_ID ? 'present' : 'missing',
-      GOOGLE_CLIENT_EMAIL: !!process.env.GOOGLE_CLIENT_EMAIL,
-      GOOGLE_PRIVATE_KEY: googlePrivateKey && googlePrivateKey.includes('BEGIN PRIVATE KEY') ? 'looks_ok' : 'invalid_or_missing',
-      OWNER_EMAIL: !!process.env.OWNER_EMAIL,
+      GROQ_API_KEY: !!GROQ_API_KEY,
+      GOOGLE_SHEET_ID: !!SHEET_ID,
+      GOOGLE_CLIENT_EMAIL: !!GOOGLE_CLIENT_EMAIL,
+      GOOGLE_PRIVATE_KEY: GOOGLE_PRIVATE_KEY.includes('BEGIN PRIVATE KEY')
+        ? 'looks_ok'
+        : 'invalid_or_missing',
+      OWNER_EMAIL: !!OWNER_EMAIL,
       SMTP_HOST: process.env.SMTP_HOST || 'MISSING',
       SMTP_PORT: process.env.SMTP_PORT || 'MISSING',
       SMTP_USER: !!process.env.SMTP_USER,
@@ -157,7 +161,7 @@ app.get('/debug', (req, res) => {
   });
 });
 
-// Avoid "Cannot GET /api/contact" confusion
+// avoid confusion when someone GETs this in browser
 app.get('/api/contact', (req, res) => {
   res.send('Use POST with JSON body to /api/contact for AI replies.');
 });
@@ -185,7 +189,7 @@ app.post('/api/contact', async (req, res) => {
       const parsed = JSON.parse(aiResp);
       if (parsed.reply_text) replyText = parsed.reply_text;
     } catch (e) {
-      // ignore, plain text
+      // ignore, treat as plain text
     }
 
     const row = [
@@ -233,6 +237,6 @@ AI Reply: ${replyText}`,
   }
 });
 
-// ----- SERVER START -----
+// ---------- SERVER START ----------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
