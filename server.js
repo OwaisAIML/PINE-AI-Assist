@@ -5,7 +5,6 @@ const express = require('express');
 const cors = require('cors');
 const { google } = require('googleapis');
 const { v4: uuidv4 } = require('uuid');
-const nodemailer = require('nodemailer');
 
 const app = express();
 app.use(cors());
@@ -33,9 +32,6 @@ console.log(
   GOOGLE_PRIVATE_KEY.includes('BEGIN PRIVATE KEY') ? 'yes' : 'no'
 );
 console.log('OWNER_EMAIL:', OWNER_EMAIL || 'MISSING');
-console.log('SMTP_HOST:', process.env.SMTP_HOST || 'MISSING');
-console.log('SMTP_PORT:', process.env.SMTP_PORT || 'MISSING');
-console.log('SMTP_USER set:', !!process.env.SMTP_USER);
 console.log('=============================');
 
 // ---------- GOOGLE SHEETS SETUP ----------
@@ -106,35 +102,8 @@ async function callGroq(messages) {
   );
 }
 
-// ---------- EMAIL (SMTP) ----------
-function createTransporter() {
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    console.warn('SMTP not fully configured, emails will not be sent.');
-    return null;
-  }
-
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT) || 587,
-    secure: Number(process.env.SMTP_PORT) === 465, // true if 465, else false
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-
-  transporter.verify((err, success) => {
-    if (err) {
-      console.warn('SMTP verify failed:', err.message);
-    } else {
-      console.log('SMTP server is ready to take messages.');
-    }
-  });
-
-  return transporter;
-}
-
-const emailTransporter = createTransporter();
+// ---------- EMAIL (DISABLED) ----------
+console.warn('Email sending is disabled (no SMTP configured).');
 
 // ---------- ROUTES ----------
 
@@ -154,9 +123,7 @@ app.get('/debug', (req, res) => {
         ? 'looks_ok'
         : 'invalid_or_missing',
       OWNER_EMAIL: !!OWNER_EMAIL,
-      SMTP_HOST: process.env.SMTP_HOST || 'MISSING',
-      SMTP_PORT: process.env.SMTP_PORT || 'MISSING',
-      SMTP_USER: !!process.env.SMTP_USER,
+      EMAIL_ENABLED: false,
     },
   });
 });
@@ -209,26 +176,8 @@ app.post('/api/contact', async (req, res) => {
       console.warn('Sheet append failed:', err.message);
     }
 
-    if (OWNER_EMAIL && emailTransporter) {
-      try {
-        const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER;
-        await emailTransporter.sendMail({
-          from: fromEmail,
-          to: OWNER_EMAIL,
-          subject: `New lead: ${name || 'Website visitor'}`,
-          text: `New lead at ${timestamp}
-Name: ${name || ''}
-Contact: ${contact || ''}
-Message: ${message || ''}
-AI Reply: ${replyText}`,
-        });
-        console.log('Lead email sent to', OWNER_EMAIL);
-      } catch (err) {
-        console.warn('Email failed:', err.message);
-      }
-    } else {
-      console.warn('Skipping email: OWNER_EMAIL or SMTP config missing.');
-    }
+    // Email notifications are disabled
+    console.warn('Skipping email notification: email sending is disabled.');
 
     return res.json({ id, reply: replyText });
   } catch (err) {
