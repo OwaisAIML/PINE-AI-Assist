@@ -83,9 +83,11 @@ async function callGroq(messages) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile', // current Groq chat model
-      messages,
-      temperature: 0.7,
+  model: 'llama-3.1-8b-instant', // faster, still good quality
+  messages,
+  temperature: 0.7,
+  max_tokens: 256,               // cap reply length
+
     }),
   });
 
@@ -169,12 +171,11 @@ app.post('/api/contact', async (req, res) => {
       source || 'web',
     ];
 
-    try {
-      await appendSheetRow(row);
-      console.log('Sheet append OK for lead', id);
-    } catch (err) {
-      console.warn('Sheet append failed:', err.message);
-    }
+   // fire and forget – don't block the response on Sheets
+appendSheetRow(row)
+  .then(() => console.log('Sheet append OK for lead', id))
+  .catch(err => console.warn('Sheet append failed:', err.message));
+
 
     // Email notifications are disabled
     console.warn('Skipping email notification: email sending is disabled.');
